@@ -93,7 +93,7 @@ _CONNECTOR_DEFAULTS = {
     'dbt Cloud':         {'letter': 'dbt', 'image': 'dbt cloud.png',   'desc': 'Transformation',     'color_bg': '#DCFCE7', 'color_txt': '#166534', 'push': False, 'pull': True,  'status': 'Not connected', 'last_sync': '', 'api_endpoint': '', 'api_token': '', 'channel': ''},
     'Alation':           {'letter': 'Al',  'image': 'alation.png',     'desc': 'Data catalog',       'color_bg': '#FEE2E2', 'color_txt': '#991B1B', 'push': True,  'pull': True,  'status': 'Not connected', 'last_sync': '', 'api_endpoint': '', 'api_token': '', 'channel': ''},
     'Slack':             {'letter': 'Sl',  'image': 'slack.png',       'desc': 'Notifications',      'color_bg': '#FEF3C7', 'color_txt': '#92400E', 'push': True,  'pull': False, 'status': 'Not connected', 'last_sync': '', 'api_endpoint': '', 'api_token': '', 'channel': '#data-governance'},
-    'Databricks Unity':  {'letter': 'DB',  'image': '',                'desc': 'Unity Catalog Tags',  'color_bg': '#FFF3E0', 'color_txt': '#E65100', 'push': True,  'pull': False, 'status': 'Not connected', 'last_sync': '', 'api_endpoint': '', 'api_token': '', 'channel': ''},
+    'Databricks Unity':  {'letter': 'DB',  'image': 'databricks.png',  'desc': 'Unity Catalog Tags',  'color_bg': '#FFF3E0', 'color_txt': '#E65100', 'push': True,  'pull': False, 'status': 'Not connected', 'last_sync': '', 'api_endpoint': '', 'api_token': '', 'channel': ''},
 }
 _needs_reinit = (
     'integration_connectors' not in st.session_state
@@ -108,7 +108,7 @@ if _needs_reinit:
         'dbt Cloud':         {'letter': 'dbt', 'image': 'dbt cloud.png',   'desc': 'Transformation',     'color_bg': '#DCFCE7', 'color_txt': '#166534', 'push': False, 'pull': True,  'status': 'Not connected', 'last_sync': '', 'api_endpoint': '', 'api_token': '', 'channel': ''},
         'Alation':           {'letter': 'Al',  'image': 'alation.png',     'desc': 'Data catalog',       'color_bg': '#FEE2E2', 'color_txt': '#991B1B', 'push': True,  'pull': True,  'status': 'Not connected', 'last_sync': '', 'api_endpoint': '', 'api_token': '', 'channel': ''},
         'Slack':             {'letter': 'Sl',  'image': 'slack.png',       'desc': 'Notifications',      'color_bg': '#FEF3C7', 'color_txt': '#92400E', 'push': True,  'pull': False, 'status': 'Not connected', 'last_sync': '', 'api_endpoint': '', 'api_token': '', 'channel': '#data-governance'},
-        'Databricks Unity':  {'letter': 'DB',  'image': '',                'desc': 'Unity Catalog Tags',  'color_bg': '#FFF3E0', 'color_txt': '#E65100', 'push': True,  'pull': False, 'status': 'Not connected', 'last_sync': '', 'api_endpoint': '', 'api_token': '', 'channel': ''},
+        'Databricks Unity':  {'letter': 'DB',  'image': 'databricks.png',  'desc': 'Unity Catalog Tags',  'color_bg': '#FFF3E0', 'color_txt': '#E65100', 'push': True,  'pull': False, 'status': 'Not connected', 'last_sync': '', 'api_endpoint': '', 'api_token': '', 'channel': ''},
     }
 
 # Permanent Cache Initialization (Survives tab-switching unmounting)
