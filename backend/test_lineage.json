@@ -1,0 +1,29 @@
+{
+    "edges": [
+        {
+            "id": "b1f6e3e6-effe-4227-83e1-fbe2515b68d0",
+            "source": "customer_id",
+            "target": "sales_table",
+            "type": "Direct",
+            "timestamp": "2026-04-13T13:25:54.517486"
+        },
+        {
+            "id": "f599fe92-f8e2-42b5-9ce5-64f937177f6c",
+            "source": "sales_table",
+            "target": "dashboard",
+            "type": "Direct",
+            "timestamp": "2026-04-13T13:25:54.521176"
+        }
+    ],
+    "nodes": {
+        "customer_id": {
+            "classification": "PII"
+        },
+        "sales_table": {
+            "classification": "PII"
+        },
+        "dashboard": {
+            "classification": "PII"
+        }
+    }
+}

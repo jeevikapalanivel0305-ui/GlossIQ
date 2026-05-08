@@ -1,0 +1,797 @@
+"""
+Glossary Management Workflow Manager
+Implements the full AI Suggestion → Approval Queue → Glossary Hub pipeline.
+
+Tables / Stores:
+  - ai_suggested_terms   → backend/ai_suggested_terms.json
+  - approval_queue       → backend/approval_queue.json
+  - glossary_hub         → backend/glossary_master.json  (shared with PersistenceManager)
+
+API:
+  - createSuggestedTerm()
+  - checkConflictWithHub()
+  - approveTerm()
+  - rejectTerm()
+  - triggerPowerAutomate()
+"""
+
+import json
+import os
+import uuid
+import smtplib
+import requests
+from datetime import datetime
+from difflib import SequenceMatcher
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
+# ── Storage paths ──────────────────────────────────────────────────────────────
+SUGGESTED_TERMS_STORE = "backend/ai_suggested_terms.json"
+APPROVAL_QUEUE_STORE  = "backend/approval_queue.json"
+MASTER_STORE          = "backend/glossary_master.json"
+AUDIT_LOG_STORE       = "backend/audit_log.json"
+
+
+class WorkflowManager:
+    # ──────────────────────────────────────────────────────────────────────────
+    # Internal helpers
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _load(path):
+        if not os.path.exists(path):
+            return []
+        try:
+            with open(path, "r") as f:
+                return json.load(f)
+        except Exception:
+            return []
+
+    @staticmethod
+    def _save(path, data):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(data, f, indent=4)
+
+    @classmethod
+    def _load_master(cls):
+        if not os.path.exists(MASTER_STORE):
+            return {}
+        try:
+            with open(MASTER_STORE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    @classmethod
+    def _save_master(cls, data):
+        os.makedirs(os.path.dirname(MASTER_STORE), exist_ok=True)
+        with open(MASTER_STORE, "w") as f:
+            json.dump(data, f, indent=4)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Public load helpers
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def load_suggested_terms(cls):
+        """Load all AI-suggested terms."""
+        return cls._load(SUGGESTED_TERMS_STORE)
+
+    @classmethod
+    def load_audit_log(cls):
+        return cls._load(AUDIT_LOG_STORE)
+
+    @classmethod
+    def _append_audit_log(cls, entry, final_status, approver_comment):
+        """
+        Append a decision record to the persistent audit log.
+        Safe to call multiple times — deduplicates by (term_id, status)
+        and also by (term_name, status) to catch re-submitted terms.
+        """
+        log = cls.load_audit_log()
+        # Dedup: skip if same term_id OR same term_name already recorded with the same status
+        entry_name = (entry.get("term_name") or "").strip().lower()
+        already = any(
+            e.get("status") == final_status and (
+                e.get("term_id") == entry.get("term_id") or
+                (entry_name and (e.get("term_name") or "").strip().lower() == entry_name)
+            )
+            for e in log
+        )
+        if already:
+            return
+        log.append({
+            "term_id":          entry.get("term_id"),
+            "term_name":        entry.get("term_name"),
+            "definition":       entry.get("definition"),
+            "source":           entry.get("source"),
+            "confidence_score": entry.get("confidence_score"),
+            "table_name":       entry.get("table_name", ""),
+            "physical_term":    entry.get("physical_term") or entry.get("related_column") or "",
+            "term_type":        entry.get("term_type", "Column"),
+            "conflict_found":   entry.get("conflict_found", False),
+            "status":           final_status,
+            "approver_comment": approver_comment,
+            "decision_date":    datetime.now().isoformat(),
+        })
+        cls._save(AUDIT_LOG_STORE, log)
+
+    @classmethod
+    def _update_audit_log_status(cls, term_name, new_status, approver_comment=None, new_term_id=None, new_definition=None):
+        """
+        Find the existing audit log row for term_name and update its status in-place.
+        Optionally updates term_id, definition, approver_comment and decision_date.
+        Used by approve_with_merge to avoid a duplicate row.
+        """
+        log = cls.load_audit_log()
+        name_lower = (term_name or "").strip().lower()
+        for row in log:
+            if (row.get("term_name") or "").strip().lower() == name_lower:
+                row["status"] = new_status
+                row["decision_date"] = datetime.now().isoformat()
+                if new_status == "Approved (Merged)":
+                    row["conflict_found"] = True
+                if approver_comment is not None:
+                    row["approver_comment"] = approver_comment
+                if new_term_id is not None:
+                    row["term_id"] = new_term_id
+                if new_definition is not None:
+                    row["definition"] = new_definition
+                break
+        cls._save(AUDIT_LOG_STORE, log)
+
+    @classmethod
+    def _rebuild_master_from_audit_log(cls):
+        """
+        Rebuild glossary_master.json exclusively from audit_log.json Approved entries.
+        The Glossary Hub is always 100% derived from the audit log — no other write path.
+        Entries are processed in chronological order so SCD Type 2 versioning is correct.
+        """
+        audit_log = cls.load_audit_log()
+        # Only Approved / Approved (Merged) entries, oldest first so versions build up correctly
+        approved = sorted(
+            [e for e in audit_log if e.get("status") in ("Approved", "Approved (Merged)")],
+            key=lambda x: x.get("decision_date", ""),
+        )
+
+        master = {}
+        for entry in approved:
+            raw_table  = (entry.get("table_name") or "").strip()
+            safe_table = raw_table.replace(" ", "_").replace("/", "_") if raw_table else None
+            asset_guid = f"workflow_{safe_table}" if safe_table else f"workflow_{entry.get('term_id', 'unknown')}"
+            table_name = raw_table if raw_table else "Workflow Approved Terms"
+
+            if asset_guid not in master:
+                master[asset_guid] = []
+
+            bucket = master[asset_guid]
+            entry_phys = (entry.get("physical_term") or entry.get("term_name") or "").strip().lower()
+
+            # SCD Type 2: deactivate any active record in this bucket that shares
+            # the same Physical Term (covers both same-name re-approvals AND
+            # different business terms mapped to the same physical column)
+            for r in bucket:
+                r_phys = (r.get("Physical Term") or "").strip().lower()
+                if r_phys and r_phys == entry_phys:
+                    r["Active"] = 0
+
+            # Version = count of all records for this physical term + 1
+            same = [r for r in bucket
+                    if (r.get("Physical Term") or "").strip().lower() == entry_phys]
+            next_version = len(same) + 1
+            bucket.append({
+                "entity_guid":              entry.get("term_id"),
+                "table_guid":               asset_guid,
+                "table_name":               table_name,
+                "Business Term":            entry.get("term_name"),
+                "Physical Term":            entry.get("physical_term") or entry.get("term_name"),
+                "Definition / Description": entry.get("definition"),
+                "Type":                     entry.get("term_type", "Column"),
+                "Source":                   entry.get("source", "Manual"),
+                "Confidence (%)":           entry.get("confidence_score", 0),
+                "Active":                   1,
+                "Version":                  next_version,
+                "Stored At":               entry.get("decision_date", datetime.now().isoformat()),
+            })
+
+        cls._save_master(master)
+        return master
+
+    @classmethod
+    def load_approval_queue(cls):
+        """Load the full approval queue."""
+        return cls._load(APPROVAL_QUEUE_STORE)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # 1. createSuggestedTerm()
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def create_suggested_term(cls, term_name, definition, source="Manual", confidence_score=80, table_name="", term_type="Column", physical_term=""):
+        """
+        Creates a new AI-suggested term and adds it to both:
+          - ai_suggested_terms store
+          - approval_queue with status 'Pending'
+
+        Prevents duplicates: if a term with the same name already exists in
+        Pending or Conflict Detected state, returns its existing term_id.
+
+        Returns the generated (or existing) term_id.
+        """
+        # Deduplication: skip if same (term_name, table_name) is already queued and not yet decided
+        _tname  = term_name.strip().lower()
+        _tbl    = (table_name or "").strip().lower()
+        queue = cls.load_approval_queue()
+        existing = next(
+            (
+                e for e in queue
+                if e.get("term_name", "").strip().lower() == _tname
+                and e.get("table_name", "").strip().lower() == _tbl
+                and e.get("status") in ("Pending", "Conflict Detected")
+            ),
+            None,
+        )
+        if existing:
+            return existing["term_id"]
+
+        now      = datetime.now().isoformat()
+        term_id  = str(uuid.uuid4())
+
+        term = {
+            "term_id":          term_id,
+            "term_name":        term_name.strip(),
+            "definition":       definition.strip(),
+            "source":           source,
+            "confidence_score": int(confidence_score),
+            "created_date":     now,
+            "table_name":       table_name.strip() if table_name else "",
+            "term_type":        term_type,
+            "physical_term":    physical_term.strip() if physical_term else "",
+        }
+
+        # Persist to ai_suggested_terms — deduplicate by (term_name, table_name)
+        suggested = cls.load_suggested_terms()
+        already_suggested = any(
+            s.get("term_name", "").strip().lower() == _tname
+            and s.get("table_name", "").strip().lower() == _tbl
+            for s in suggested
+        )
+        if not already_suggested:
+            suggested.append(term)
+            cls._save(SUGGESTED_TERMS_STORE, suggested)
+
+        # Add entry to approval_queue
+        queue_entry = {
+            **term,
+            "status":              "Pending",
+            "conflict_checked":    False,
+            "conflict_found":      False,
+            "conflict_match_type": None,
+            "existing_term_id":    None,
+            "existing_term_name":  None,
+            "approver_comment":    "",
+            "decision_date":       None,
+        }
+        queue.append(queue_entry)
+        cls._save(APPROVAL_QUEUE_STORE, queue)
+
+        # Immediately run a fresh conflict check so the KPI card and queue status
+        # reflect any conflicts as soon as the term lands in the queue.
+        cls.run_conflict_check(term_id)
+
+        return term_id
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # 2. checkConflictWithHub()
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def check_conflict_with_hub(cls, term_name):
+        """
+        Checks if term_name already exists in the Glossary Hub (master store).
+
+        Match logic:
+          - Exact term_name match (case-insensitive)
+          - Fuzzy match with similarity >= 0.85
+
+        Returns:
+            (conflict_found: bool, existing_term_id: str|None,
+             existing_term_name: str|None, match_type: str)
+        """
+        master     = cls._load_master()
+        term_lower = term_name.strip().lower()
+
+        for asset_guid, records in master.items():
+            for record in records:
+                if record.get("Active") != 1:
+                    continue
+                for field in ["Business Term", "Physical Term", "Original Name",
+                               "Glossary Term", "name"]:
+                    existing = record.get(field, "")
+                    if not existing:
+                        continue
+                    existing_lower = str(existing).strip().lower()
+
+                    # Exact match
+                    if existing_lower == term_lower:
+                        return (
+                            True,
+                            record.get("entity_guid", asset_guid),
+                            str(existing),
+                            "Exact Match",
+                        )
+
+                    # Fuzzy match
+                    ratio = SequenceMatcher(None, term_lower, existing_lower).ratio()
+                    if ratio >= 0.85:
+                        return (
+                            True,
+                            record.get("entity_guid", asset_guid),
+                            str(existing),
+                            f"Fuzzy Match ({int(ratio * 100)}%)",
+                        )
+
+        return False, None, None, "No Conflict"
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Internal queue helper
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def _update_queue_entry(cls, term_id, updates):
+        queue = cls.load_approval_queue()
+        for entry in queue:
+            if entry["term_id"] == term_id:
+                entry.update(updates)
+                break
+        cls._save(APPROVAL_QUEUE_STORE, queue)
+
+    @classmethod
+    def run_conflict_check(cls, term_id):
+        """
+        Run a fresh conflict check for a specific term and update its queue entry.
+
+        Checks (in priority order):
+          1. Glossary Hub (master store) — exact / fuzzy name match
+          2. Audit log — same business term already Approved (must use Merge)
+          3. Audit log — same physical_term + table_name but DIFFERENT business term
+             already Approved (Different Business Term Already Approved)
+
+        Sets status to 'Conflict Detected' if any conflict is found.
+        Always resets conflict_checked = True so the result is always fresh.
+
+        Returns: (conflict_found: bool, match_type: str)
+        """
+        queue = cls.load_approval_queue()
+        entry = next((e for e in queue if e["term_id"] == term_id), None)
+        if not entry:
+            return False, "Term not found"
+
+        term_name  = entry.get("term_name", "")
+        name_lower = term_name.strip().lower()
+        physical   = (entry.get("physical_term") or entry.get("related_column") or "").strip().lower()
+        table      = (entry.get("table_name") or "").strip().lower()
+
+        # ── Check 1: Glossary Hub (master store) ─────────────────────────────
+        conflict_found, existing_id, existing_name, match_type = cls.check_conflict_with_hub(term_name)
+
+        # ── Check 2: Audit log — same business term already Approved ─────────
+        if not conflict_found:
+            audit_log = cls.load_audit_log()
+            same_approved = next(
+                (
+                    e for e in audit_log
+                    if e.get("status") == "Approved"
+                    and (e.get("term_name") or "").strip().lower() == name_lower
+                ),
+                None,
+            )
+            if same_approved:
+                conflict_found = True
+                existing_id    = same_approved.get("term_id")
+                existing_name  = same_approved.get("term_name")
+                match_type     = "Already Approved — Use Merge"
+        else:
+            audit_log = None  # already loaded lazily below if needed
+
+        # ── Check 3: Audit log — different business term for same physical term
+        if not conflict_found and physical:
+            if audit_log is None:
+                audit_log = cls.load_audit_log()
+            diff_term = next(
+                (
+                    e for e in audit_log
+                    if e.get("status") == "Approved"
+                    and (e.get("physical_term") or "").strip().lower() == physical
+                    and (e.get("table_name") or "").strip().lower() == table
+                    and (e.get("term_name") or "").strip().lower() != name_lower
+                ),
+                None,
+            )
+            if diff_term:
+                conflict_found = True
+                existing_id    = diff_term.get("term_id")
+                existing_name  = diff_term.get("term_name")
+                match_type     = "Different Business Term Already Approved"
+
+        updates = {
+            "conflict_checked":    True,
+            "conflict_found":      conflict_found,
+            "existing_term_id":    existing_id,
+            "existing_term_name":  existing_name,
+            "conflict_match_type": match_type,
+        }
+        if conflict_found:
+            updates["status"] = "Conflict Detected"
+        else:
+            # Reset to Pending if a previous check had flagged it but now it's clean
+            if entry.get("status") == "Conflict Detected":
+                updates["status"] = "Pending"
+
+        cls._update_queue_entry(term_id, updates)
+        return conflict_found, match_type
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # 3. approveTerm()
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def approve_term(cls, term_id, approver_comment="", webhooks=None):
+        """
+        Approve a term:
+          1. Audit log is written first (source of truth)
+          2. Glossary Hub is rebuilt from the audit log
+          3. Queue status updated, Power Automate triggered
+
+        Returns: (success: bool, message: str)
+        """
+        queue = cls.load_approval_queue()
+        entry = next((e for e in queue if e["term_id"] == term_id), None)
+        if not entry:
+            return False, "Term not found in queue"
+
+        # Block if this term name already exists as Approved in the audit log
+        audit_log = cls.load_audit_log()
+        entry_name = (entry.get("term_name") or "").strip().lower()
+        prior = next(
+            (e for e in audit_log
+             if e.get("status") == "Approved"
+             and (e.get("term_name") or "").strip().lower() == entry_name),
+            None,
+        )
+        if prior:
+            cls._update_queue_entry(term_id, {
+                "status":              "Conflict Detected",
+                "conflict_found":      True,
+                "conflict_checked":    True,
+                "conflict_match_type": "Already approved in audit log",
+                "existing_term_name":  prior.get("term_name"),
+                "existing_term_id":    prior.get("term_id"),
+            })
+            return False, f"Term '{entry.get('term_name')}' was already approved. Use Merge to update it."
+
+        # 1. Write to audit log FIRST (source of truth)
+        cls._append_audit_log(entry, "Approved", approver_comment)
+
+        # 2. Rebuild Glossary Hub entirely from audit log
+        cls._rebuild_master_from_audit_log()
+
+        # 3. Update queue entry
+        cls._update_queue_entry(term_id, {
+            "status":           "Approved",
+            "approver_comment": approver_comment,
+            "decision_date":    datetime.now().isoformat(),
+        })
+
+        # 4. Trigger Power Automate
+        cls.trigger_power_automate("term.approved", entry, webhooks)
+
+        return True, "Term approved and added to Glossary Hub"
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # 4. rejectTerm()
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def reject_term(cls, term_id, approver_comment="", webhooks=None):
+        """
+        Reject a term:
+          1. Updates queue status → 'Rejected'
+          2. Triggers Power Automate webhook (sends email via PA flow)
+
+        Returns: (success: bool, message: str, pa_results: list)
+        """
+        queue = cls.load_approval_queue()
+        entry = next((e for e in queue if e["term_id"] == term_id), None)
+        if not entry:
+            return False, "Term not found in queue", []
+
+        cls._update_queue_entry(term_id, {
+            "status":           "Rejected",
+            "approver_comment": approver_comment,
+            "decision_date":    datetime.now().isoformat(),
+        })
+
+        # Persist to audit log
+        cls._append_audit_log(entry, "Rejected", approver_comment)
+
+        pa_results = cls.trigger_power_automate("term.rejected", entry, webhooks)
+
+        return True, "Term rejected", pa_results
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Rejection email
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def send_rejection_email(cls, entry, approver_comment=""):
+        """
+        Send a rejection notification email to the fixed recipient.
+        SMTP credentials are read from Streamlit secrets:
+
+            [email]
+            smtp_host     = "smtp.gmail.com"
+            smtp_port     = 587
+            sender_email  = "your-sender@example.com"
+            sender_password = "your-app-password"
+
+        Returns (success: bool, message: str).
+        """
+        RECIPIENT = "jeevika.palanivelu@ilink-systems.com"
+
+        try:
+            import streamlit as st
+            cfg          = st.secrets.get("email", {})
+            smtp_host    = cfg.get("smtp_host",      "smtp.gmail.com")
+            smtp_port    = int(cfg.get("smtp_port",  587))
+            sender_email = cfg.get("sender_email",   "")
+            sender_pass  = cfg.get("sender_password","")
+        except Exception:
+            # Outside Streamlit context (e.g. unit tests) – skip silently
+            return False, "Streamlit secrets unavailable"
+
+        if not sender_email or not sender_pass:
+            return False, "Email credentials not configured in .streamlit/secrets.toml"
+
+        term_name  = entry.get("term_name", "N/A")
+        definition = entry.get("definition", "N/A")
+        source     = entry.get("source", "N/A")
+        score      = entry.get("confidence_score", "N/A")
+        comment    = approver_comment or "No comment provided."
+        timestamp  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        subject = f"[GlossIQ] Term Rejected: {term_name}"
+
+        html_body = f"""\
+<html><body style="font-family:Arial,sans-serif;color:#111827;">
+<div style="max-width:600px;margin:0 auto;border:1px solid #E5E7EB;border-radius:8px;overflow:hidden;">
+  <div style="background:#CC0000;padding:20px 24px;">
+    <h2 style="color:white;margin:0;">GlossIQ — Term Rejected</h2>
+  </div>
+  <div style="padding:24px;">
+    <p>A glossary term has been <strong style="color:#EF4444;">rejected</strong> and requires your attention.</p>
+    <table style="width:100%;border-collapse:collapse;margin-top:16px;">
+      <tr style="background:#F9FAFB;"><td style="padding:10px 14px;font-weight:600;width:35%;">Term Name</td><td style="padding:10px 14px;">{term_name}</td></tr>
+      <tr><td style="padding:10px 14px;font-weight:600;">Definition</td><td style="padding:10px 14px;">{definition}</td></tr>
+      <tr style="background:#F9FAFB;"><td style="padding:10px 14px;font-weight:600;">Source</td><td style="padding:10px 14px;">{source}</td></tr>
+      <tr><td style="padding:10px 14px;font-weight:600;">Confidence Score</td><td style="padding:10px 14px;">{score}%</td></tr>
+      <tr style="background:#F9FAFB;"><td style="padding:10px 14px;font-weight:600;">Approver Comment</td><td style="padding:10px 14px;">{comment}</td></tr>
+      <tr><td style="padding:10px 14px;font-weight:600;">Rejected At</td><td style="padding:10px 14px;">{timestamp}</td></tr>
+    </table>
+    <p style="margin-top:24px;font-size:13px;color:#6B7280;">This notification was generated automatically by GlossIQ. Log in to the <strong>Review &amp; Approval</strong> tab to take further action.</p>
+  </div>
+</div>
+</body></html>"""
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = sender_email
+        msg["To"]      = RECIPIENT
+        msg.attach(MIMEText(html_body, "html"))
+
+        try:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+                server.ehlo()
+                server.starttls()
+                server.login(sender_email, sender_pass)
+                server.sendmail(sender_email, [RECIPIENT], msg.as_string())
+            return True, f"Rejection email sent to {RECIPIENT}"
+        except smtplib.SMTPAuthenticationError:
+            return False, "SMTP authentication failed — check sender_email / sender_password in secrets.toml"
+        except Exception as exc:
+            return False, f"Failed to send rejection email: {exc}"
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Approve with Merge
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def approve_with_merge(cls, term_id, approver_comment="", webhooks=None):
+        """
+        Approve and merge with an existing term already in the audit log.
+        Updates the existing audit log row status to 'Approved (Merged)' in-place
+        (no new row is added). Then rebuilds the Glossary Hub from the audit log.
+
+        Returns: (success: bool, message: str)
+        """
+        queue = cls.load_approval_queue()
+        entry = next((e for e in queue if e["term_id"] == term_id), None)
+        if not entry:
+            return False, "Term not found in queue"
+
+        # 1. Update existing audit log row in-place (no new row)
+        cls._update_audit_log_status(
+            term_name=entry.get("term_name"),
+            new_status="Approved (Merged)",
+            approver_comment=approver_comment,
+            new_term_id=term_id,
+            new_definition=entry.get("definition"),
+        )
+
+        # 2. Rebuild Glossary Hub from audit log
+        cls._rebuild_master_from_audit_log()
+
+        # 3. Update queue entry
+        cls._update_queue_entry(term_id, {
+            "status":           "Approved (Merged)",
+            "approver_comment": approver_comment,
+            "decision_date":    datetime.now().isoformat(),
+        })
+
+        # 4. Trigger Power Automate
+        cls.trigger_power_automate("term.approved_merged", entry, webhooks)
+
+        return True, "Term merged — existing audit log record updated to Approved (Merged)"
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # 5. triggerPowerAutomate()
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def trigger_power_automate(cls, event, term_data, webhooks=None):
+        """
+        Trigger a Power Automate flow via HTTP POST to configured webhooks.
+
+        Flow actions delivered in payload:
+          - send_notification  (email / Teams)
+          - log_audit_entry
+          - update_purview
+
+        Returns a list of results per webhook call.
+        """
+        if not webhooks:
+            return []
+
+        payload = {
+            "event":       event,
+            "term_id":     term_data.get("term_id"),
+            "term_name":   term_data.get("term_name"),
+            "definition":  term_data.get("definition"),
+            "source":      term_data.get("source"),
+            "status":      term_data.get("status"),
+            "timestamp":   datetime.now().isoformat(),
+            "actions":     ["send_notification", "log_audit_entry", "update_purview"],
+        }
+
+        results = []
+        for wh in webhooks:
+            if wh.get("status") != "Active":
+                continue
+            # Match by event name or wildcard
+            if wh.get("event") not in (event, "*"):
+                continue
+            url = wh.get("url", "")
+            if not url or not url.startswith("https://"):
+                results.append({"url": url, "error": "Invalid or non-HTTPS URL skipped", "success": False})
+                continue
+            try:
+                resp = requests.post(url, json=payload, timeout=10)
+                results.append({
+                    "url":         url,
+                    "status_code": resp.status_code,
+                    "success":     resp.ok,
+                })
+            except Exception as exc:
+                results.append({"url": url, "error": str(exc), "success": False})
+
+        return results
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Stats helper
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @classmethod
+    def get_queue_stats(cls):
+        """
+        Return a dict of {status: count} for the KPI cards.
+
+        Source of truth:
+          - "Pending" and "Conflict Detected" → approval queue
+            (these terms have not been decided yet and are NOT in the audit log)
+          - "Approved", "Approved (Merged)", "Rejected" → audit log
+            (decided entries are written to the audit log on decision)
+        """
+        queue = cls.load_approval_queue()
+        audit_log = cls.load_audit_log()
+
+        stats = {
+            "Pending":           sum(1 for e in queue if e.get("status") == "Pending"),
+            "Conflict Detected": sum(1 for e in queue if e.get("status") == "Conflict Detected"),
+            "Approved":          sum(1 for e in audit_log if e.get("status") == "Approved"),
+            "Approved (Merged)": sum(1 for e in audit_log if e.get("status") == "Approved (Merged)"),
+            "Rejected":          sum(1 for e in audit_log if e.get("status") == "Rejected"),
+        }
+        return stats
+
+    @classmethod
+    def clear_ai_suggested_terms(cls):
+        """
+        Remove all AI Suggester entries from ai_suggested_terms store.
+        Called before sending a fresh AI recommendation batch so the store
+        only contains the currently selected terms.
+        Returns count of removed entries.
+        """
+        suggested = cls.load_suggested_terms()
+        before    = len(suggested)
+        suggested = [s for s in suggested if s.get("source") != "AI Suggester"]
+        removed   = before - len(suggested)
+        if removed:
+            cls._save(SUGGESTED_TERMS_STORE, suggested)
+        return removed
+
+    @classmethod
+    def clear_ai_pending_from_queue(cls):
+        """
+        Remove all AI Suggester entries with status Pending or Conflict Detected
+        from the approval queue. Called before sending a fresh AI recommendation
+        batch so the queue only contains the currently selected terms.
+        Returns count of removed entries.
+        """
+        queue  = cls.load_approval_queue()
+        before = len(queue)
+        queue  = [
+            e for e in queue
+            if not (
+                e.get("source") == "AI Suggester"
+                and e.get("status") in ("Pending", "Conflict Detected")
+            )
+        ]
+        removed = before - len(queue)
+        if removed:
+            cls._save(APPROVAL_QUEUE_STORE, queue)
+        return removed
+
+    @classmethod
+    def remove_from_queue_by_name(cls, term_name):
+        """
+        Remove a term from the approval queue by name (case-insensitive).
+        Only removes entries that are still undecided (Pending / Conflict Detected).
+        Returns True if anything was removed.
+        """
+        queue   = cls.load_approval_queue()
+        before  = len(queue)
+        queue   = [
+            e for e in queue
+            if not (
+                e.get("term_name", "").strip().lower() == term_name.strip().lower()
+                and e.get("status") in ("Pending", "Conflict Detected")
+            )
+        ]
+        if len(queue) < before:
+            cls._save(APPROVAL_QUEUE_STORE, queue)
+            return True
+        return False
+
+    @classmethod
+    def purge_decided_from_queue(cls):
+        """
+        Remove all decided entries (Approved / Approved (Merged) / Rejected)
+        from the approval_queue store. They are already visible in the Audit Log.
+        Returns count of removed entries.
+        """
+        queue   = cls.load_approval_queue()
+        active  = [e for e in queue if e.get("status") in ("Pending", "Conflict Detected")]
+        removed = len(queue) - len(active)
+        cls._save(APPROVAL_QUEUE_STORE, active)
+        return removed

@@ -1,0 +1,436 @@
+/* ======================================= */
+/* ENTERPRISE DASHBOARD THEME (ICORE)      */
+/* ======================================= */
+
+/* Import fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* Global Styles */
+.stApp {
+    font-family: 'Inter', sans-serif;
+    background-color: #F9FAFB !important; /* Extremely light grey for professional feel */
+    color: #111827;
+}
+
+/* Hide Streamlit components to give a native app feel */
+header[data-testid="stHeader"] {
+    background-color: transparent !important;
+}
+
+footer {
+    display: none !important;
+}
+
+#MainMenu {
+    visibility: hidden;
+}
+
+/* Page padding and layout */
+.block-container {
+    padding-top: 2rem !important;
+    padding-bottom: 2rem !important;
+    max-width: 100% !important;
+    padding-left: 2rem !important;
+    padding-right: 2rem !important;
+}
+
+/* ======================================= */
+/* SIDEBAR CUSTOMIZATION                   */
+/* ======================================= */
+[data-testid="stSidebar"] {
+    background-color: #ffffff !important;
+    border-right: 1px solid #E5E7EB;
+    padding-top: 10px;
+}
+
+/* Hide standard Nav in sidebar */
+[data-testid="stSidebarNav"] {
+    display: none !important;
+}
+
+.sidebar-category {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: #9CA3AF;
+    letter-spacing: 0.1em;
+    margin: 20px 0 8px 24px;
+}
+
+.sidebar-brand {
+    padding: 20px 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.sidebar-item {
+    display: flex;
+    align-items: center;
+    padding: 10px 16px 10px 24px;
+    color: #4B5563;
+    font-size: 14px;
+    font-weight: 500;
+    text-decoration: none;
+    cursor: pointer;
+    border-right: 3px solid transparent;
+    transition: all 0.2s;
+    gap: 14px;
+}
+
+.sidebar-item:hover {
+    background-color: #F9FAFB;
+    color: #111827;
+}
+
+.sidebar-item.active {
+    background-color: #FEF2F2;
+    color: #CC0000;
+    border-right: 3px solid #CC0000;
+    font-weight: 600;
+}
+
+.sidebar-item-icon {
+    width: 20px;
+    height: 20px;
+    opacity: 0.6;
+}
+
+.active .sidebar-item-icon {
+    opacity: 1;
+}
+
+/* Sidebar Buttons Styling */
+[data-testid="stSidebar"] div.stButton > button {
+    border: none !important;
+    text-align: left !important;
+    justify-content: flex-start !important;
+    padding: 12px 24px !important;
+    height: 48px !important;
+    font-size: 14px !important;
+    font-weight: 500 !important;
+    background-color: transparent !important;
+    border-radius: 8px !important;
+    margin: 4px 12px !important;
+    color: #4B5563 !important;
+    width: calc(100% - 24px) !important;
+    transition: all 0.2s ease !important;
+}
+
+[data-testid="stSidebar"] div.stButton > button:hover {
+    background-color: #F3F4F6 !important;
+    color: #111827 !important;
+}
+
+[data-testid="stSidebar"] div.stButton > button[kind="primary"] {
+    background-color: #FEF2F2 !important;
+    color: #CC0000 !important;
+    border-left: 4px solid #CC0000 !important;
+    font-weight: 600 !important;
+}
+
+/* ======================================= */
+/* DASHBOARD HEADER & BREADCRUMBS          */
+/* ======================================= */
+.dashboard-header {
+    background-color: #ffffff;
+    border-bottom: 1px solid #E5E7EB;
+    padding: 12px 32px;
+    margin: 0 -2rem 24px -2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.breadcrumb-container {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #6B7280;
+}
+
+.breadcrumb-parent {
+    color: #9CA3AF;
+    font-weight: 500;
+}
+
+.system-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #10B981;
+    font-weight: 600;
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #10B981;
+    display: inline-block;
+}
+
+/* ======================================= */
+/* WORKBENCH & CARD LAYOUT                 */
+/* ======================================= */
+.workbench-header {
+    margin-bottom: 32px;
+}
+
+.accent-line {
+    width: 40px;
+    height: 4px;
+    background-color: #CC0000;
+    margin-bottom: 12px;
+}
+
+.workbench-title {
+    font-size: 32px;
+    font-weight: 700;
+    color: #111827;
+    margin: 0;
+}
+
+.workbench-desc {
+    font-size: 14px;
+    color: #6B7280;
+    margin-top: 8px;
+}
+
+/* Connector Grid */
+.connector-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 24px;
+    margin-top: 24px;
+}
+
+.connector-card {
+    background: #ffffff;
+    border: 1px solid #E5E7EB;
+    border-radius: 12px;
+    padding: 24px;
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+
+.connector-card:hover {
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+    border-color: #D1D5DB;
+}
+
+.conn-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 20px;
+}
+
+.conn-icon {
+    width: 48px;
+    height: 48px;
+    background: #F3F4F6;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.conn-status {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 10px;
+    border-radius: 9999px;
+}
+
+.status-online {
+    background-color: #D1FAE5;
+    color: #065F46;
+}
+
+.conn-name {
+    font-size: 16px;
+    font-weight: 600;
+    color: #111827;
+    margin: 0;
+}
+
+/* Standard Buttons */
+.stTabs [data-baseweb="tab-list"] {
+    background: transparent;
+    gap: 32px;
+    border-bottom: 1px solid #E5E7EB;
+    margin-bottom: 24px;
+}
+
+.stTabs [data-baseweb="tab"] {
+    background: transparent !important;
+    border: none !important;
+    padding: 12px 0 !important;
+    font-weight: 500 !important;
+}
+
+.stTabs [data-baseweb="tab"][aria-selected="true"] {
+    color: #CC0000 !important;
+    border-bottom: 2px solid #CC0000 !important;
+}
+
+/* Standard Buttons */
+div.stButton>button[kind="primary"] {
+    background-color: #CC0000 !important;
+    border: none !important;
+    border-radius: 6px !important;
+    font-weight: 600 !important;
+    padding: 10px 24px !important;
+}
+
+div.stButton>button[kind="secondary"] {
+    background-color: #ffffff !important;
+    border: 1px solid #D1D5DB !important;
+    color: #374151 !important;
+}
+
+/* ======================================= */
+/* CUTE MODAL / POPUP                      */
+/* ======================================= */
+.cute-modal {
+    background-color: #ffffff;
+    border-radius: 16px;
+    padding: 32px;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.08);
+    border: 1px solid #E5E7EB;
+    margin-bottom: 40px;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+}
+
+.modal-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: #111827;
+}
+
+/* ======================================= */
+/* GLOSSARY HUB — PURVIEW FILTER PANEL     */
+/* ======================================= */
+
+/* Outer filter card container */
+.purview-filter-panel {
+    background: #ffffff;
+    border: 1px solid #E5E7EB;
+    border-radius: 8px;
+    padding: 16px 0 8px 0;
+    margin-bottom: 4px;
+}
+
+.filter-panel-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #111827;
+    padding: 0 16px 12px 16px;
+    border-bottom: 1px solid #F3F4F6;
+}
+
+/* Style each expander to look like a Purview filter row */
+[data-testid="stExpander"] {
+    border: none !important;
+    border-bottom: 1px solid #F3F4F6 !important;
+    border-radius: 0 !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+}
+
+[data-testid="stExpander"]:last-child {
+    border-bottom: none !important;
+}
+
+/* Expander header row */
+[data-testid="stExpander"] summary {
+    font-size: 13.5px !important;
+    font-weight: 500 !important;
+    color: #374151 !important;
+    padding: 13px 16px !important;
+    background: #ffffff !important;
+    border-radius: 0 !important;
+    transition: background 0.15s ease !important;
+}
+
+[data-testid="stExpander"] summary:hover {
+    background: #F9FAFB !important;
+    color: #111827 !important;
+}
+
+/* Radio buttons inside expander */
+[data-testid="stExpander"] .stRadio label {
+    font-size: 13px !important;
+    color: #4B5563 !important;
+    font-weight: 400 !important;
+}
+
+[data-testid="stExpander"] .stRadio label:hover {
+    color: #111827 !important;
+}
+
+/* Bold radio CIRCLES — thicken the SVG ring */
+[data-testid="stExpander"] .stRadio svg {
+    width: 20px !important;
+    height: 20px !important;
+}
+[data-testid="stExpander"] .stRadio svg circle {
+    stroke-width: 3 !important;
+}
+
+/* Bold checkbox SQUARES — thicken the SVG border */
+[data-testid="stExpander"] .stCheckbox svg {
+    width: 20px !important;
+    height: 20px !important;
+}
+[data-testid="stExpander"] .stCheckbox svg rect,
+[data-testid="stExpander"] .stCheckbox svg path {
+    stroke-width: 3 !important;
+}
+
+/* Checkbox label — normal weight */
+[data-testid="stExpander"] .stCheckbox label {
+    font-weight: 400 !important;
+    font-size: 13px !important;
+    color: #4B5563 !important;
+}
+
+/* Asset badge in toolbar */
+.hub-asset-badge {
+    font-size: 14px;
+    color: #374151;
+    padding: 8px 14px;
+    background: #F9FAFB;
+    border: 1px solid #E5E7EB;
+    border-radius: 6px;
+    display: inline-block;
+}
+
+/* Status badges */
+.hub-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 9999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    margin-bottom: 12px;
+}
+
+.hub-badge-active {
+    background: #D1FAE5;
+    color: #065F46;
+}
+
+.hub-badge-total {
+    background: #E2E8F0;
+    color: #334155;
+}

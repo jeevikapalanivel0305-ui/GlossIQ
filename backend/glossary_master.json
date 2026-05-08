@@ -1,0 +1,60 @@
+{
+    "workflow_PATIENT_ADDRESS": [
+        {
+            "entity_guid": "a1e7ce04-3386-4373-9712-b6d93f3bb83b",
+            "table_guid": "workflow_PATIENT_ADDRESS",
+            "table_name": "PATIENT_ADDRESS",
+            "Business Term": "Patient Residential Information",
+            "Physical Term": "PATIENT_ADDRESS",
+            "Definition / Description": "A structured collection of geographic location data points associated with an individual receiving medical services or registered within a healthcare system.",
+            "Type": "Table",
+            "Source": "AI Suggester",
+            "Confidence (%)": 100,
+            "Active": 1,
+            "Version": 1,
+            "Stored At": "2026-04-29T14:40:03.368242"
+        },
+        {
+            "entity_guid": "fcd1ee41-93fc-4b30-aeb2-8408b5d31572",
+            "table_guid": "workflow_PATIENT_ADDRESS",
+            "table_name": "PATIENT_ADDRESS",
+            "Business Term": "Unique Patient Identifier",
+            "Physical Term": "PATIENT_ID",
+            "Definition / Description": "The primary alphanumeric key assigned to an individual to ensure distinct identification and data linkage across disparate clinical and administrative systems.",
+            "Type": "Column",
+            "Source": "AI Suggester",
+            "Confidence (%)": 100,
+            "Active": 0,
+            "Version": 1,
+            "Stored At": "2026-04-29T14:40:21.489613"
+        },
+        {
+            "entity_guid": "88197878-7759-4fc9-878b-07845efecc38",
+            "table_guid": "workflow_PATIENT_ADDRESS",
+            "table_name": "PATIENT_ADDRESS",
+            "Business Term": "Street Address Detail",
+            "Physical Term": "ADDRESS_LINE",
+            "Definition / Description": "The specific building number, street name, and any secondary unit designations such as apartment or suite numbers identifying a physical location.",
+            "Type": "Column",
+            "Source": "AI Suggester",
+            "Confidence (%)": 95,
+            "Active": 1,
+            "Version": 1,
+            "Stored At": "2026-04-29T14:40:27.226970"
+        },
+        {
+            "entity_guid": "92f483c6-9726-4bca-8b47-b461cbd708d2",
+            "table_guid": "workflow_PATIENT_ADDRESS",
+            "table_name": "PATIENT_ADDRESS",
+            "Business Term": "Individual Primary Identifier",
+            "Physical Term": "PATIENT_ID",
+            "Definition / Description": "A unique, non-repeating alphanumeric token assigned to a specific person to distinguish them from all other entities within the master data ecosystem.",
+            "Type": "Column",
+            "Source": "AI Suggester",
+            "Confidence (%)": 100,
+            "Active": 1,
+            "Version": 2,
+            "Stored At": "2026-04-29T14:59:24.714631"
+        }
+    ]
+}
