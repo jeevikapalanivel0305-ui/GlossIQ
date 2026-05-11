@@ -66,18 +66,19 @@ class GovernanceEngine:
         return "Internal", 0, "No standard pattern found"
 
     @classmethod
-    def process_suggestions(cls, suggestions):
+    def process_suggestions(cls, suggestions, apply_classification=True):
         """
         Overlay automated rules on top of AI suggestions.
+        apply_classification: if False, skip writing classification/governance_tags.
         """
         for s in suggestions:
             col_name = s.get('related_column', '')
             if not col_name and s.get('type') == 'Table':
                 col_name = s.get('display_column', '')
-            
-            if col_name:
+
+            if col_name and apply_classification:
                 auto_cls, auto_conf, reason = cls.detect_category(col_name)
-                
+
                 # If rule engine is very confident, override AI or mark for review
                 if auto_conf >= 90:
                     current_cls = s.get('classification', 'Internal')
@@ -86,5 +87,5 @@ class GovernanceEngine:
                         s['governance_tags'] = f"Auto: {reason}"
                         # Increase confidence if it matches
                         s['confidence_score'] = max(s.get('confidence_score', 0), auto_conf)
-                
+
         return suggestions

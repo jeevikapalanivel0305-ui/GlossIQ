@@ -642,9 +642,10 @@ def render_review_tab():
                     _ephys = (entry.get("physical_term") or entry.get("related_column") or "").strip().lower()
                     _etbl  = (entry.get("table_name") or "").strip().lower()
 
-                    # Case 1: exact same business term already approved → must Merge
+                    # Case 1: exact same business term + same table already approved → must Merge
                     audit_conflict = any(
                         (e.get("term_name") or "").strip().lower() == _ename
+                        and (e.get("table_name") or "").strip().lower() == _etbl
                         and e.get("status") == "Approved"
                         for e in _audit
                     )
@@ -986,6 +987,10 @@ def render_review_tab():
             unique = sorted(seen.values(), key=lambda x: x.get("decision_date", ""), reverse=True)
 
             # ── Table filter ──────────────────────────────────────────────────
+            # Normalize table names for consistent grouping regardless of casing
+            for e in unique:
+                if e.get("table_name"):
+                    e["table_name"] = e["table_name"].strip().upper()
             all_tables = sorted(set(e.get("table_name", "") or "—" for e in unique))
             filter_col, _ = st.columns([1, 3])
             with filter_col:
@@ -1385,7 +1390,13 @@ def render_glossary_tab():
 
     # New AI Suggestion button in this tab
     if st.button("AI Suggestion", type="primary"):
-            # Generate all recommendations via Gemini
+            # Validate Azure OpenAI credentials upfront before looping
+            from backend.ai_recommender import get_openai_client
+            _test_client = get_openai_client()
+            if not _test_client:
+                st.stop()
+
+            # Generate all recommendations
             all_s = []
             industry = st.session_state.get('industry', 'General')
             options = st.session_state.get('ai_options', ["Business Term", "Business Definition"])
@@ -1409,7 +1420,12 @@ def render_glossary_tab():
                 all_s.extend(suggestions)
             
             # Apply Automated Governance Rules (Deterministic Regex/Keyword matching)
-            all_s = GovernanceEngine.process_suggestions(all_s)
+            all_s = GovernanceEngine.process_suggestions(all_s, apply_classification="Classifications" in options)
+
+            # Remove classification key entirely if user did not request it
+            if "Classifications" not in options:
+                for s in all_s:
+                    s.pop("classification", None)
             
             st.session_state.glossary_suggestions = all_s
             df = pd.DataFrame(all_s)
@@ -1541,32 +1557,46 @@ def render_glossary_tab():
             if selected_df.empty:
                 st.warning("Please select at least one term to send to the Approval Queue.")
             else:
-                # Clear previous AI-suggested entries so stores only have current selection
-                WorkflowManager.clear_ai_pending_from_queue()
-                WorkflowManager.clear_ai_suggested_terms()
-                queued_count = 0
+                queued_count  = 0
+                skipped_count = 0
                 for _, row in selected_df.iterrows():
                     term_name     = row.get("Business Term") or row.get("Original Name") or ""
                     definition    = row.get("Description") or row.get("Definition / Description") or ""
                     score         = int(row.get("Confidence (%)", 80) or 80)
                     term_type     = str(row.get("Type", "Column") or "Column")
                     physical_term = str(row.get("Physical Term") or row.get("related_column") or "")
+                    table_nm      = str(row.get("table_name", "") or "")
                     if term_name:
+                        # create_suggested_term returns existing term_id if already Pending/Conflict
+                        _tname = term_name.strip().lower()
+                        _ttbl  = table_nm.strip().lower()
+                        existing_q = WorkflowManager.load_approval_queue()
+                        already_pending = any(
+                            e.get("term_name", "").strip().lower() == _tname
+                            and e.get("table_name", "").strip().lower() == _ttbl
+                            and e.get("status") in ("Pending", "Conflict Detected")
+                            for e in existing_q
+                        )
+                        if already_pending:
+                            skipped_count += 1
+                            continue
                         WorkflowManager.create_suggested_term(
                             term_name        = term_name,
                             definition       = definition,
                             source           = "AI Suggester",
                             confidence_score = score,
-                            table_name       = str(row.get("table_name", "") or ""),
+                            table_name       = table_nm,
                             term_type        = term_type,
                             physical_term    = physical_term,
                         )
                         queued_count += 1
+                if skipped_count and not queued_count:
+                    st.info(f"All {skipped_count} selected term(s) are already in the Approval Queue as Pending. No duplicates added.")
+                elif skipped_count:
+                    st.info(f"{skipped_count} term(s) already pending — skipped. {queued_count} new term(s) added.")
                 if queued_count:
                     st.session_state.selected_tab = "Review & Approval"
                     st.rerun()
-                else:
-                    st.warning("No valid terms found in selection.")
 
 def render_master_glossary_tab():
     render_dashboard_header("Glossary Hub")
