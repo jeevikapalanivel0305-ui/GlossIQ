@@ -1557,32 +1557,46 @@ def render_glossary_tab():
             if selected_df.empty:
                 st.warning("Please select at least one term to send to the Approval Queue.")
             else:
-                # Clear previous AI-suggested entries so stores only have current selection
-                WorkflowManager.clear_ai_pending_from_queue()
-                WorkflowManager.clear_ai_suggested_terms()
-                queued_count = 0
+                queued_count  = 0
+                skipped_count = 0
                 for _, row in selected_df.iterrows():
                     term_name     = row.get("Business Term") or row.get("Original Name") or ""
                     definition    = row.get("Description") or row.get("Definition / Description") or ""
                     score         = int(row.get("Confidence (%)", 80) or 80)
                     term_type     = str(row.get("Type", "Column") or "Column")
                     physical_term = str(row.get("Physical Term") or row.get("related_column") or "")
+                    table_nm      = str(row.get("table_name", "") or "")
                     if term_name:
+                        # create_suggested_term returns existing term_id if already Pending/Conflict
+                        _tname = term_name.strip().lower()
+                        _ttbl  = table_nm.strip().lower()
+                        existing_q = WorkflowManager.load_approval_queue()
+                        already_pending = any(
+                            e.get("term_name", "").strip().lower() == _tname
+                            and e.get("table_name", "").strip().lower() == _ttbl
+                            and e.get("status") in ("Pending", "Conflict Detected")
+                            for e in existing_q
+                        )
+                        if already_pending:
+                            skipped_count += 1
+                            continue
                         WorkflowManager.create_suggested_term(
                             term_name        = term_name,
                             definition       = definition,
                             source           = "AI Suggester",
                             confidence_score = score,
-                            table_name       = str(row.get("table_name", "") or ""),
+                            table_name       = table_nm,
                             term_type        = term_type,
                             physical_term    = physical_term,
                         )
                         queued_count += 1
+                if skipped_count and not queued_count:
+                    st.info(f"All {skipped_count} selected term(s) are already in the Approval Queue as Pending. No duplicates added.")
+                elif skipped_count:
+                    st.info(f"{skipped_count} term(s) already pending — skipped. {queued_count} new term(s) added.")
                 if queued_count:
                     st.session_state.selected_tab = "Review & Approval"
                     st.rerun()
-                else:
-                    st.warning("No valid terms found in selection.")
 
 def render_master_glossary_tab():
     render_dashboard_header("Glossary Hub")
