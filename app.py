@@ -978,23 +978,19 @@ def render_review_tab():
         if not decided:
             st.info("No decisions have been made yet.")
         else:
-            # Normalize table_name to uppercase so entries from different casing sources group together
-            for e in decided:
-                if e.get("table_name"):
-                    e["table_name"] = e["table_name"].strip().upper()
-
-            # Deduplicate by (term_name, table_name, status) — keeps latest decision
+            # Deduplicate by (term_name, status) — keeps latest decision per term+status,
+            # even if term was re-submitted with a different term_id
             seen = {}
             for e in sorted(decided, key=lambda x: x.get("decision_date", "")):
-                key = (
-                    (e.get("term_name") or "").strip().lower(),
-                    (e.get("table_name") or "").strip().upper(),
-                    e.get("status"),
-                )
+                key = ((e.get("term_name") or "").strip().lower(), e.get("status"))
                 seen[key] = e
             unique = sorted(seen.values(), key=lambda x: x.get("decision_date", ""), reverse=True)
 
             # ── Table filter ──────────────────────────────────────────────────
+            # Normalize table names for consistent grouping regardless of casing
+            for e in unique:
+                if e.get("table_name"):
+                    e["table_name"] = e["table_name"].strip().upper()
             all_tables = sorted(set(e.get("table_name", "") or "—" for e in unique))
             filter_col, _ = st.columns([1, 3])
             with filter_col:
