@@ -642,9 +642,10 @@ def render_review_tab():
                     _ephys = (entry.get("physical_term") or entry.get("related_column") or "").strip().lower()
                     _etbl  = (entry.get("table_name") or "").strip().lower()
 
-                    # Case 1: exact same business term already approved → must Merge
+                    # Case 1: exact same business term + same table already approved → must Merge
                     audit_conflict = any(
                         (e.get("term_name") or "").strip().lower() == _ename
+                        and (e.get("table_name") or "").strip().lower() == _etbl
                         and e.get("status") == "Approved"
                         for e in _audit
                     )

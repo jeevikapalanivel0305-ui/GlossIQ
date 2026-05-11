@@ -37,37 +37,100 @@ class WorkflowManager:
     # Internal helpers
     # ──────────────────────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _load(path):
+    # Session-state cache keys (so data survives page refreshes within a session)
+    _SS_KEYS = {
+        SUGGESTED_TERMS_STORE: "_wm_suggested_terms",
+        APPROVAL_QUEUE_STORE:  "_wm_approval_queue",
+        MASTER_STORE:          "_wm_master_store",
+        AUDIT_LOG_STORE:       "_wm_audit_log",
+    }
+
+    @classmethod
+    def _load(cls, path):
+        """Load a list store, using session_state as primary cache."""
+        try:
+            import streamlit as st
+            key = cls._SS_KEYS.get(path)
+            if key and key in st.session_state:
+                return list(st.session_state[key])  # return a copy
+        except Exception:
+            pass
+        # Fall back to disk
         if not os.path.exists(path):
             return []
         try:
             with open(path, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+            try:
+                import streamlit as st
+                key = cls._SS_KEYS.get(path)
+                if key:
+                    st.session_state[key] = data
+            except Exception:
+                pass
+            return data
         except Exception:
             return []
 
-    @staticmethod
-    def _save(path, data):
+    @classmethod
+    def _save(cls, path, data):
+        """Save a list store to both session_state and disk."""
+        try:
+            import streamlit as st
+            key = cls._SS_KEYS.get(path)
+            if key:
+                st.session_state[key] = data
+        except Exception:
+            pass
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
-            json.dump(data, f, indent=4)
+        try:
+            with open(path, "w") as f:
+                json.dump(data, f, indent=4)
+        except Exception:
+            pass  # Disk write may fail on read-only deployments; session_state still has data
 
     @classmethod
     def _load_master(cls):
+        """Load the master dict store, using session_state as primary cache."""
+        try:
+            import streamlit as st
+            key = cls._SS_KEYS.get(MASTER_STORE)
+            if key and key in st.session_state:
+                return dict(st.session_state[key])
+        except Exception:
+            pass
+        # Fall back to disk
         if not os.path.exists(MASTER_STORE):
             return {}
         try:
             with open(MASTER_STORE, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+            try:
+                import streamlit as st
+                key = cls._SS_KEYS.get(MASTER_STORE)
+                if key:
+                    st.session_state[key] = data
+            except Exception:
+                pass
+            return data
         except Exception:
             return {}
 
     @classmethod
     def _save_master(cls, data):
+        try:
+            import streamlit as st
+            key = cls._SS_KEYS.get(MASTER_STORE)
+            if key:
+                st.session_state[key] = data
+        except Exception:
+            pass
         os.makedirs(os.path.dirname(MASTER_STORE), exist_ok=True)
-        with open(MASTER_STORE, "w") as f:
-            json.dump(data, f, indent=4)
+        try:
+            with open(MASTER_STORE, "w") as f:
+                json.dump(data, f, indent=4)
+        except Exception:
+            pass  # session_state still has data
 
     # ──────────────────────────────────────────────────────────────────────────
     # Public load helpers
@@ -158,7 +221,8 @@ class WorkflowManager:
         master = {}
         for entry in approved:
             raw_table  = (entry.get("table_name") or "").strip()
-            safe_table = raw_table.replace(" ", "_").replace("/", "_") if raw_table else None
+            # Normalize to uppercase so 'patient_address' and 'PATIENT_ADDRESS' map to the same bucket
+            safe_table = raw_table.upper().replace(" ", "_").replace("/", "_") if raw_table else None
             asset_guid = f"workflow_{safe_table}" if safe_table else f"workflow_{entry.get('term_id', 'unknown')}"
             table_name = raw_table if raw_table else "Workflow Approved Terms"
 
@@ -451,13 +515,15 @@ class WorkflowManager:
         if not entry:
             return False, "Term not found in queue"
 
-        # Block if this term name already exists as Approved in the audit log
+        # Block if this exact term name already exists as Approved for the SAME table in the audit log
         audit_log = cls.load_audit_log()
-        entry_name = (entry.get("term_name") or "").strip().lower()
+        entry_name  = (entry.get("term_name") or "").strip().lower()
+        entry_table = (entry.get("table_name") or "").strip().lower()
         prior = next(
             (e for e in audit_log
              if e.get("status") == "Approved"
-             and (e.get("term_name") or "").strip().lower() == entry_name),
+             and (e.get("term_name") or "").strip().lower() == entry_name
+             and (e.get("table_name") or "").strip().lower() == entry_table),
             None,
         )
         if prior:
@@ -469,7 +535,7 @@ class WorkflowManager:
                 "existing_term_name":  prior.get("term_name"),
                 "existing_term_id":    prior.get("term_id"),
             })
-            return False, f"Term '{entry.get('term_name')}' was already approved. Use Merge to update it."
+            return False, f"Term '{entry.get('term_name')}' was already approved for table '{entry.get('table_name')}'. Use Merge to update it."
 
         # 1. Write to audit log FIRST (source of truth)
         cls._append_audit_log(entry, "Approved", approver_comment)
@@ -620,14 +686,28 @@ class WorkflowManager:
         if not entry:
             return False, "Term not found in queue"
 
-        # 1. Update existing audit log row in-place (no new row)
-        cls._update_audit_log_status(
-            term_name=entry.get("term_name"),
-            new_status="Approved (Merged)",
-            approver_comment=approver_comment,
-            new_term_id=term_id,
-            new_definition=entry.get("definition"),
+        # 1. Check if existing audit log entry exists for this term + table
+        audit_log   = cls.load_audit_log()
+        entry_name  = (entry.get("term_name") or "").strip().lower()
+        entry_table = (entry.get("table_name") or "").strip().lower()
+        existing_in_log = any(
+            (e.get("term_name") or "").strip().lower() == entry_name
+            and (e.get("table_name") or "").strip().lower() == entry_table
+            for e in audit_log
         )
+
+        if existing_in_log:
+            # Update existing row in-place (SCD Type 2 update)
+            cls._update_audit_log_status(
+                term_name=entry.get("term_name"),
+                new_status="Approved (Merged)",
+                approver_comment=approver_comment,
+                new_term_id=term_id,
+                new_definition=entry.get("definition"),
+            )
+        else:
+            # No prior entry (data reset / first merge): append as new Approved (Merged) row
+            cls._append_audit_log(entry, "Approved (Merged)", approver_comment)
 
         # 2. Rebuild Glossary Hub from audit log
         cls._rebuild_master_from_audit_log()

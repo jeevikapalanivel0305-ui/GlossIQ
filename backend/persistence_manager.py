@@ -3,28 +3,52 @@ import os
 from datetime import datetime
 
 MASTER_STORE = "backend/glossary_master.json"
+_SS_MASTER_KEY = "_wm_master_store"  # Shared session_state key with WorkflowManager
+
 
 class PersistenceManager:
     """
     Manages the persistent storage and versioning of approved glossary terms.
     Implements Granular SCD Type 2 (Term-Level Versioning).
     """
-    
+
     @staticmethod
     def _load_store():
+        """Load master store, using session_state as primary cache."""
+        try:
+            import streamlit as st
+            if _SS_MASTER_KEY in st.session_state:
+                return dict(st.session_state[_SS_MASTER_KEY])
+        except Exception:
+            pass
         if not os.path.exists(MASTER_STORE):
             return {}
         try:
             with open(MASTER_STORE, 'r') as f:
-                return json.load(f)
-        except:
+                data = json.load(f)
+            try:
+                import streamlit as st
+                st.session_state[_SS_MASTER_KEY] = data
+            except Exception:
+                pass
+            return data
+        except Exception:
             return {}
 
     @staticmethod
     def _save_store(data):
+        """Save master store to session_state and disk."""
+        try:
+            import streamlit as st
+            st.session_state[_SS_MASTER_KEY] = data
+        except Exception:
+            pass
         os.makedirs(os.path.dirname(MASTER_STORE), exist_ok=True)
-        with open(MASTER_STORE, 'w') as f:
-            json.dump(data, f, indent=4)
+        try:
+            with open(MASTER_STORE, 'w') as f:
+                json.dump(data, f, indent=4)
+        except Exception:
+            pass  # session_state still has data
 
     @classmethod
     def get_all_versions(cls, asset_guids):
