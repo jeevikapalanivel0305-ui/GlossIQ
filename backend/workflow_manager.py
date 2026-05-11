@@ -170,7 +170,8 @@ class WorkflowManager:
             "definition":       entry.get("definition"),
             "source":           entry.get("source"),
             "confidence_score": entry.get("confidence_score"),
-            "table_name":       entry.get("table_name", ""),
+            # Always normalize table_name to uppercase for consistent grouping
+            "table_name":       (entry.get("table_name") or "").strip().upper() or "",
             "physical_term":    entry.get("physical_term") or entry.get("related_column") or "",
             "term_type":        entry.get("term_type", "Column"),
             "conflict_found":   entry.get("conflict_found", False),
@@ -309,7 +310,9 @@ class WorkflowManager:
             "source":           source,
             "confidence_score": int(confidence_score),
             "created_date":     now,
-            "table_name":       table_name.strip() if table_name else "",
+            # Normalize table_name to uppercase so all entries for the same table
+            # are grouped together regardless of the casing from the source system
+            "table_name":       table_name.strip().upper() if table_name else "",
             "term_type":        term_type,
             "physical_term":    physical_term.strip() if physical_term else "",
         }
