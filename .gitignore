@@ -10,7 +10,6 @@ Thumbs.db
 # Streamlit
 .streamlit/
 !.streamlit/config.toml
-!.streamlit/secrets.toml
 
 # Environments
 .venv/
