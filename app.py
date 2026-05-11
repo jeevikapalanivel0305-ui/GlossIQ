@@ -1415,7 +1415,12 @@ def render_glossary_tab():
                 all_s.extend(suggestions)
             
             # Apply Automated Governance Rules (Deterministic Regex/Keyword matching)
-            all_s = GovernanceEngine.process_suggestions(all_s)
+            all_s = GovernanceEngine.process_suggestions(all_s, apply_classification="Classifications" in options)
+
+            # Remove classification key entirely if user did not request it
+            if "Classifications" not in options:
+                for s in all_s:
+                    s.pop("classification", None)
             
             st.session_state.glossary_suggestions = all_s
             df = pd.DataFrame(all_s)
