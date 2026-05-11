@@ -9,22 +9,29 @@ from openai import AzureOpenAI
 def get_openai_client():
     """Initialize Azure OpenAI client from Streamlit secrets"""
     try:
-        endpoint   = st.secrets.get("AZURE_OPENAI_ENDPOINT")
-        api_key    = st.secrets.get("AZURE_OPENAI_API_KEY")
+        endpoint    = st.secrets.get("AZURE_OPENAI_ENDPOINT")
+        api_key     = st.secrets.get("AZURE_OPENAI_API_KEY")
         api_version = st.secrets.get("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
 
-        if not endpoint or not api_key:
-            st.error("⚠️ AZURE_OPENAI_ENDPOINT or AZURE_OPENAI_API_KEY not found in Streamlit secrets (.streamlit/secrets.toml)")
+        if not endpoint:
+            st.error("⚠️ **AZURE_OPENAI_ENDPOINT** is missing from Streamlit secrets. "
+                     "Go to your app's Settings → Secrets in the Streamlit Cloud dashboard and add it.")
+            return None
+        if not api_key:
+            st.error("⚠️ **AZURE_OPENAI_API_KEY** is missing from Streamlit secrets. "
+                     "Go to your app's Settings → Secrets in the Streamlit Cloud dashboard and add it.")
             return None
 
         client = AzureOpenAI(
             azure_endpoint=endpoint.strip(),
             api_key=api_key.strip(),
-            api_version=api_version.strip()
+            api_version=api_version.strip(),
+            timeout=60.0,
+            max_retries=2,
         )
         return client
     except Exception as e:
-        st.error(f"Error initializing Azure OpenAI client: {str(e)}")
+        st.error(f"❌ Error initializing Azure OpenAI client: {type(e).__name__}: {str(e)}")
         return None
 
 def _deployment():
@@ -108,14 +115,15 @@ class AIRecommender:
 def generate_glossary_suggestions(table_name, columns, industry="General", business_context="", selected_options=None):
     """Generate Glossary suggestions based on user selection"""
     client = get_openai_client()
-    if not client: return []
-    
+    if not client:
+        return []
+
     if not selected_options:
         selected_options = ["Business Term", "Column Description"]
-        
+
     instr = []
     fields = ["type", "related_column", "confidence_score"] # Always include identifiers
-    
+
     if "Business Term" in selected_options:
         instr.append("- Suggest a formal Enterprise Business Concept for 'name' (Business Term). Do NOT just expand the column abbreviation. Provide the true business meaning (e.g. use 'Primary Identifier' instead of 'ID', or 'Biological Sex Classification' instead of just 'Gender').")
         fields.append("name")
@@ -125,19 +133,17 @@ def generate_glossary_suggestions(table_name, columns, industry="General", busin
     if "Classifications" in selected_options:
         instr.append("- Assign a 'classification' (e.g. PII, Sensitive, Internal, Public)")
         fields.append("classification")
-    
 
-        
     prompt = f"""You are a Data Governance expert. Analyze the table '{table_name}' and its columns: {', '.join(columns)}.
     Context: {business_context}
     Industry: {industry}
-    
+
     Task:
     - First, provide a suggestion for the overall Table.
     - Then, provide a suggestion for each column.
     {chr(10).join(instr)}
     - For 'confidence_score', provide an integer 0-100 reflecting your certainty based on the schema clarity and matching history.
-    
+
     Response Requirements:
     - Respond ONLY with a valid JSON array of objects.
     - Do NOT prefix column terms with the table name (e.g. for table "Patient", use "Date of Birth" instead of "Patient Date of Birth").
@@ -145,20 +151,25 @@ def generate_glossary_suggestions(table_name, columns, industry="General", busin
     - For the table-level entry, leave 'related_column' empty.
     - For 'type', use 'Table' or 'Column'.
     - Provide NO domain."""
-    
+
+    deployment = _deployment()
+    max_tok = _max_tokens()
+    text = ""
     try:
         response = client.chat.completions.create(
-            model=_deployment(),
+            model=deployment,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=_max_tokens()
+            max_tokens=max_tok
         )
         text = response.choices[0].message.content
-        if "```json" in text: text = text.split("```json")[1].split("```")[0].strip()
-        elif "```" in text: text = text.split("```")[1].split("```")[0].strip()
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0].strip()
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0].strip()
         return json.loads(text)
     except json.JSONDecodeError as jde:
-        st.error(f"AI generated invalid JSON: {jde}\n\nRaw Text:\n{text}")
+        st.error(f"❌ AI returned invalid JSON for table **{table_name}**: {jde}\n\nRaw response:\n```\n{text[:500]}\n```")
         return []
     except Exception as e:
-        st.error(f"AI Generation failed: {str(e)}")
+        st.error(f"❌ AI Generation failed for table **{table_name}**: `{type(e).__name__}: {str(e)}`")
         return []

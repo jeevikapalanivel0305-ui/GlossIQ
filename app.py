@@ -1385,7 +1385,13 @@ def render_glossary_tab():
 
     # New AI Suggestion button in this tab
     if st.button("AI Suggestion", type="primary"):
-            # Generate all recommendations via Gemini
+            # Validate Azure OpenAI credentials upfront before looping
+            from backend.ai_recommender import get_openai_client
+            _test_client = get_openai_client()
+            if not _test_client:
+                st.stop()
+
+            # Generate all recommendations
             all_s = []
             industry = st.session_state.get('industry', 'General')
             options = st.session_state.get('ai_options', ["Business Term", "Business Definition"])
