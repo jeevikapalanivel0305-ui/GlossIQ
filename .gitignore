@@ -7,10 +7,8 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Streamlit
-.streamlit/
-!.streamlit/config.toml
-!.streamlit/secrets.toml
+# Streamlit secrets — never commit!
+.streamlit/secrets.toml
 
 # Environments
 .venv/
